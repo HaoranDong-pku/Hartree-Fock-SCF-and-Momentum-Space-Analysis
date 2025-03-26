@@ -25,18 +25,58 @@ def load_wavefunction_data(orbital_idx):
         print(f"Directory {data_dir} not found. Run hartree_fock.py first.")
         return None, None, None, None, None, None
     
-    # Load wave function data
+    # Get all available orbitals first for better reporting
+    orbital_files = glob.glob(os.path.join(data_dir, 'orbital_*_3d.npy'))
+    available_orbitals = sorted([int(os.path.basename(f).split('_')[1]) for f in orbital_files])
+    
+    if not available_orbitals:
+        print(f"No orbital data found in {data_dir}. Run hartree_fock.py first.")
+        return None, None, None, None, None, None
+    
+    # Try to detect if we have orbital energies to determine occupied vs. virtual
+    orbital_energies_file = os.path.join(data_dir, 'orbital_energies.npy')
+    if os.path.exists(orbital_energies_file):
+        try:
+            orbital_energies = np.load(orbital_energies_file)
+            num_orbitals = len(orbital_energies)
+            print(f"Found {num_orbitals} orbitals with energy data")
+            
+            # Try to detect number of electrons
+            highest_occupied = None
+            for i in range(len(available_orbitals) - 1):
+                # Look for HOMO-LUMO gap
+                if available_orbitals[i] + 1 == available_orbitals[i+1]:
+                    if i+1 < len(orbital_energies) and i < len(orbital_energies):
+                        gap = orbital_energies[i+1] - orbital_energies[i]
+                        if gap > 0.1:  # Significant gap indicates HOMO-LUMO
+                            highest_occupied = available_orbitals[i]
+                            print(f"Detected highest occupied orbital: {highest_occupied}")
+                            break
+            
+            if highest_occupied is not None:
+                # Check if requested orbital is occupied or virtual
+                if orbital_idx <= highest_occupied:
+                    orbital_type = "occupied"
+                else:
+                    orbital_type = "virtual"
+                print(f"Orbital {orbital_idx} is {orbital_type}")
+        except Exception as e:
+            print(f"Error analyzing orbital energies: {e}")
+    
+    # Load the specific requested orbital
     psi_file = os.path.join(data_dir, f'orbital_{orbital_idx}_3d.npy')
     if not os.path.exists(psi_file):
-        # Try to find any orbital file
-        orbital_files = glob.glob(os.path.join(data_dir, 'orbital_*_3d.npy'))
-        if not orbital_files:
-            print(f"No wave function data found in {data_dir}. Run hartree_fock.py first.")
-            return None, None, None, None, None, None
-        print(f"Orbital {orbital_idx} not found. Using {os.path.basename(orbital_files[0])} instead.")
-        psi_file = orbital_files[0]
-        orbital_idx = int(os.path.basename(psi_file).split('_')[1])
+        print(f"Orbital {orbital_idx} not found. Available orbitals: {available_orbitals}")
+        
+        # Suggest a reasonable alternative
+        if available_orbitals:
+            # Try to find closest available orbital
+            closest_idx = min(available_orbitals, key=lambda x: abs(x - orbital_idx))
+            print(f"Using closest available orbital {closest_idx} instead.")
+            orbital_idx = closest_idx
+            psi_file = os.path.join(data_dir, f'orbital_{orbital_idx}_3d.npy')
     
+    print(f"Loading wave function data for orbital {orbital_idx}")
     psi_3d = np.load(psi_file)
     
     # Load grid coordinates
@@ -46,7 +86,6 @@ def load_wavefunction_data(orbital_idx):
     
     # Try to load orbital energies
     try:
-        orbital_energies_file = os.path.join(data_dir, 'orbital_energies.npy')
         if os.path.exists(orbital_energies_file):
             orbital_energies = np.load(orbital_energies_file)
             # Binding energy is negative of orbital energy
@@ -63,7 +102,6 @@ def load_wavefunction_data(orbital_idx):
         print(f"Error loading orbital energies: {e}. Using default E_B.")
         E_B = 0.5  # Default value
     
-    print(f"Loaded wave function data for orbital {orbital_idx}")
     print(f"Grid shape: {psi_3d.shape}")
     
     return psi_3d, x, y, z, orbital_idx, E_B
@@ -519,8 +557,16 @@ def create_compton_profile_plot(p_radial, compton_values, E_B, p_min, p_max, orb
     # Save data if output directory exists
     if os.path.exists('momentum_data'):
         os.makedirs('momentum_data', exist_ok=True)
+        
+        # Save with binding energy in filename (detailed version)
         filename = f'momentum_data/orbital_{orbital_idx}_compton_profile_EB_{E_B:.4f}.png'
         fig.savefig(filename)
+        
+        # Also save with a simpler filename for easier access
+        simple_filename = f'momentum_data/orbital_{orbital_idx}_compton.png'
+        fig.savefig(simple_filename)
+        
+        # Save numerical data
         np.save(f'momentum_data/orbital_{orbital_idx}_compton_p.npy', p_plot)
         np.save(f'momentum_data/orbital_{orbital_idx}_compton_values_EB_{E_B:.4f}.npy', compton_plot)
         np.save(f'momentum_data/orbital_{orbital_idx}_compton_energy.npy', energy_plot)

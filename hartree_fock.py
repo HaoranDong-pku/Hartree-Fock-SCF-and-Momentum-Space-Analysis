@@ -5,6 +5,7 @@ import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
 import os
 import subprocess
+import glob
 
 class HartreeFock:
     """
@@ -849,7 +850,7 @@ class HartreeFock:
         
         return wavefunction
     
-    def save_3d_wavefunction(self, orbital_idx, grid_size=20, box_size=5.0):
+    def save_3d_wavefunction(self, orbital_idx, grid_size=20, box_size=5.0, visualize=True):
         """
         Calculate and save the 3D wave function for a specific orbital
         
@@ -861,6 +862,8 @@ class HartreeFock:
             Number of points along each dimension
         box_size : float
             Size of the box in atomic units
+        visualize : bool
+            Whether to generate visualization images
         """
         print(f"Calculating 3D wave function for orbital {orbital_idx}...")
         
@@ -887,19 +890,11 @@ class HartreeFock:
         filename = f'wavefunction_data/orbital_{orbital_idx}_3d.npy'
         np.save(filename, psi_3d)
         
-        # Also save coordinates
-        np.save('wavefunction_data/grid_x.npy', x)
-        np.save('wavefunction_data/grid_y.npy', y)
-        np.save('wavefunction_data/grid_z.npy', z)
-        
-        # Save orbital energies for binding energy calculations
-        np.save('wavefunction_data/orbital_energies.npy', self.orbital_energies)
-        
         print(f"Wave function data saved to {filename}")
-        print(f"Orbital energies saved to wavefunction_data/orbital_energies.npy")
         
-        # Generate visualization of 3D wave function
-        self.visualize_3d_wavefunction(orbital_idx, psi_3d, x, y, z)
+        # Generate visualization if requested
+        if visualize:
+            self.visualize_3d_wavefunction(orbital_idx, psi_3d, x, y, z)
     
     def visualize_3d_wavefunction(self, orbital_idx, psi_3d, x, y, z):
         """
@@ -914,6 +909,8 @@ class HartreeFock:
         x, y, z : arrays
             Grid coordinates
         """
+        print(f"Generating visualizations for orbital {orbital_idx}...")
+        
         # 1. Create slices through the center
         mid_x = len(x) // 2
         mid_y = len(y) // 2
@@ -941,40 +938,44 @@ class HartreeFock:
         plt.savefig(f'wavefunction_data/orbital_{orbital_idx}_xz_slice.png')
         plt.close()
         
-        # 2. 3D isosurface plot (for positive and negative values)
-        # Calculate isosurface levels (use percentiles to get reasonable values)
-        psi_abs = np.abs(psi_3d)
-        if psi_abs.max() > 0:
-            iso_level = np.percentile(psi_abs[psi_abs > 0], 90)  # 90th percentile of non-zero values
-            
-            # Create figure
-            fig = plt.figure(figsize=(10, 10))
-            ax = fig.add_subplot(111, projection='3d')
-            
-            # Create coordinate arrays
-            X, Y, Z = np.meshgrid(x, y, z, indexing='ij')
-            
-            # Plot positive isosurface
-            pos = psi_3d > iso_level
-            if np.any(pos):
-                ax.scatter(X[pos], Y[pos], Z[pos], c='r', alpha=0.3, marker='o', s=5)
-            
-            # Plot negative isosurface
-            neg = psi_3d < -iso_level
-            if np.any(neg):
-                ax.scatter(X[neg], Y[neg], Z[neg], c='b', alpha=0.3, marker='o', s=5)
-            
-            ax.set_xlabel('x (a.u.)')
-            ax.set_ylabel('y (a.u.)')
-            ax.set_zlabel('z (a.u.)')
-            ax.set_title(f'Orbital {orbital_idx} - 3D Isosurface')
-            
-            plt.savefig(f'wavefunction_data/orbital_{orbital_idx}_3d_isosurface.png')
-            plt.close()
+        # 2. 3D isosurface plot (only for selected orbitals to save computation)
+        # Check if this is an important orbital (highest occupied or first virtual)
+        is_important = (orbital_idx == self.num_occ - 1) or (orbital_idx == self.num_occ)
+        
+        if is_important:
+            # Calculate isosurface levels (use percentiles to get reasonable values)
+            psi_abs = np.abs(psi_3d)
+            if psi_abs.max() > 0:
+                iso_level = np.percentile(psi_abs[psi_abs > 0], 90)  # 90th percentile of non-zero values
+                
+                # Create figure
+                fig = plt.figure(figsize=(10, 10))
+                ax = fig.add_subplot(111, projection='3d')
+                
+                # Create coordinate arrays
+                X, Y, Z = np.meshgrid(x, y, z, indexing='ij')
+                
+                # Plot positive isosurface
+                pos = psi_3d > iso_level
+                if np.any(pos):
+                    ax.scatter(X[pos], Y[pos], Z[pos], c='r', alpha=0.3, marker='o', s=5)
+                
+                # Plot negative isosurface
+                neg = psi_3d < -iso_level
+                if np.any(neg):
+                    ax.scatter(X[neg], Y[neg], Z[neg], c='b', alpha=0.3, marker='o', s=5)
+                
+                ax.set_xlabel('x (a.u.)')
+                ax.set_ylabel('y (a.u.)')
+                ax.set_zlabel('z (a.u.)')
+                ax.set_title(f'Orbital {orbital_idx} - 3D Isosurface')
+                
+                plt.savefig(f'wavefunction_data/orbital_{orbital_idx}_3d_isosurface.png')
+                plt.close()
 
     def run_calculation(self, atom_name=None, atomic_number=None, num_electrons=None, 
                        max_iterations=100, convergence_threshold=1e-6, basis_size=None,
-                       grid_size=None, box_size=None, verbose=True):
+                       grid_size=None, box_size=None, verbose=True, selected_orbitals=None):
         """
         Run the Hartree-Fock calculation with specified parameters
         
@@ -989,7 +990,7 @@ class HartreeFock:
         max_iterations : int
             Maximum number of SCF iterations
         convergence_threshold : float
-            Convergence threshold for energy
+            Energy convergence criterion
         basis_size : int
             Number of basis functions
         grid_size : int
@@ -998,12 +999,32 @@ class HartreeFock:
             Size of the box in atomic units
         verbose : bool
             Whether to print detailed output
+        selected_orbitals : list
+            List of orbital indices to calculate and save (None = calculate all)
             
         Returns:
         --------
         dict
             Dictionary containing results of the calculation
         """
+        # Clean up old results first
+        if os.path.exists('wavefunction_data'):
+            if verbose:
+                print("Cleaning up old wavefunction data...")
+            # Remove all files in the directory
+            for file in glob.glob('wavefunction_data/*'):
+                os.remove(file)
+        
+        # Also remove other output files
+        for file in ['scf_convergence.png', 'hf_orbitals.png']:
+            if os.path.exists(file):
+                os.remove(file)
+        
+        # Clean up momentum data directory if it exists
+        if os.path.exists('momentum_data'):
+            for file in glob.glob('momentum_data/*'):
+                os.remove(file)
+        
         # Set atomic parameters
         if atom_name is not None:
             if atom_name == 'He':
@@ -1113,16 +1134,66 @@ class HartreeFock:
         # Run SCF calculation
         energy, C, orbital_energies = self.scf_cycle()
         
-        # Calculate 3D wave function for outermost electron
+        # Save wave function data for selected orbitals
         if verbose:
-            print("Calculating 3D wave function for outermost electron...")
+            print("Calculating and saving 3D wave functions for selected orbitals...")
         
-        orbital_idx = self.num_electrons // 2 - 1  # Outermost occupied orbital (0-indexed)
+        # Create directory for orbital data
+        os.makedirs('wavefunction_data', exist_ok=True)
         
-        # Save wave function data
-        if verbose:
-            print("Saving wave function data...")
-        self.save_3d_wavefunction(orbital_idx, self.grid_size, self.box_size)
+        # Save orbital energies for binding energy calculations
+        np.save('wavefunction_data/orbital_energies.npy', self.orbital_energies)
+        
+        # Save basic grid coordinates
+        x = np.linspace(-self.box_size, self.box_size, self.grid_size)
+        y = np.linspace(-self.box_size, self.box_size, self.grid_size)
+        z = np.linspace(-self.box_size, self.box_size, self.grid_size)
+        np.save('wavefunction_data/grid_x.npy', x)
+        np.save('wavefunction_data/grid_y.npy', y)
+        np.save('wavefunction_data/grid_z.npy', z)
+        
+        # Determine which orbitals to save
+        if selected_orbitals is not None and len(selected_orbitals) > 0:
+            # Use user-selected orbitals
+            orbitals_to_process = [idx for idx in selected_orbitals if idx < self.basis_size]
+            if verbose:
+                print(f"Processing {len(orbitals_to_process)} user-selected orbitals...")
+        else:
+            # Default: process all occupied orbitals
+            orbitals_to_process = list(range(self.num_occ))
+            
+            # For larger atoms, also include some virtual orbitals
+            if self.num_occ < self.basis_size and self.Z > 2:
+                # Add up to 3 virtual orbitals 
+                for idx in range(self.num_occ, min(self.num_occ + 3, self.basis_size)):
+                    orbitals_to_process.append(idx)
+            
+            if verbose:
+                print(f"Processing all {len(orbitals_to_process)} default orbitals...")
+        
+        # Process selected orbitals
+        for orbital_idx in orbitals_to_process:
+            if orbital_idx >= self.basis_size:
+                if verbose:
+                    print(f"Skipping orbital {orbital_idx} (exceeds basis size {self.basis_size})...")
+                continue
+                
+            if verbose:
+                # Determine orbital type for informative message
+                if orbital_idx < self.num_occ:
+                    orbital_type = "occupied"
+                    if orbital_idx == self.num_occ - 1:
+                        orbital_type = "HOMO (highest occupied)"
+                else:
+                    orbital_type = "virtual"
+                    if orbital_idx == self.num_occ:
+                        orbital_type = "LUMO (lowest unoccupied)"
+                        
+                print(f"Processing orbital {orbital_idx} ({orbital_type})...")
+            
+            # For important orbitals (HOMO, LUMO), always generate visualizations
+            is_important = (orbital_idx == self.num_occ - 1) or (orbital_idx == self.num_occ)
+            self.save_3d_wavefunction(orbital_idx, self.grid_size, self.box_size, visualize=True)
         
         # Plot convergence and orbitals if available
         if hasattr(self, 'energies') and len(self.energies) > 0:
@@ -1139,6 +1210,7 @@ class HartreeFock:
             'orbital_coefficients': self.C,
             'converged': self.converged,
             'iterations': len(self.energies),
+            'num_occ': self.num_occ,
         }
         
         return results
@@ -1330,7 +1402,8 @@ def main():
 def run_hartree_fock_calculation(mode='predefined', atom_name='He', atomic_number=None, 
                                num_electrons=None, max_iterations=100, 
                                convergence_threshold=1e-6, basis_size=None,
-                               grid_size=None, box_size=None, verbose=True):
+                               grid_size=None, box_size=None, verbose=True,
+                               selected_orbitals=None):
     """
     Run Hartree-Fock calculation with the specified parameters
     
@@ -1356,6 +1429,8 @@ def run_hartree_fock_calculation(mode='predefined', atom_name='He', atomic_numbe
         Size of the box in atomic units
     verbose : bool
         Whether to print detailed output
+    selected_orbitals : list
+        List of orbital indices to calculate and save (None = calculate all)
         
     Returns:
     --------
@@ -1375,7 +1450,8 @@ def run_hartree_fock_calculation(mode='predefined', atom_name='He', atomic_numbe
             basis_size=basis_size,
             grid_size=grid_size,
             box_size=box_size,
-            verbose=verbose
+            verbose=verbose,
+            selected_orbitals=selected_orbitals
         )
     elif mode == 'custom':
         if atomic_number is None or num_electrons is None:
@@ -1389,7 +1465,8 @@ def run_hartree_fock_calculation(mode='predefined', atom_name='He', atomic_numbe
             basis_size=basis_size,
             grid_size=grid_size,
             box_size=box_size,
-            verbose=verbose
+            verbose=verbose,
+            selected_orbitals=selected_orbitals
         )
     else:
         raise ValueError(f"Invalid mode: {mode}. Use 'predefined' or 'custom'")
